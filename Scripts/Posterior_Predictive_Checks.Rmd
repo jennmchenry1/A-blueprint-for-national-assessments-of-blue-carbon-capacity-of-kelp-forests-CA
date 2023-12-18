@@ -1,0 +1,83 @@
+---
+title: "Posterior_Predictive_Checks"
+author: "Jennifer McHenry"
+date: "2023-12-18"
+output: html_document
+---
+
+```{r setup, include=FALSE}
+knitr::opts_chunk$set(echo = TRUE)
+library(brms)
+library(patchwork)
+library(ggplot2)
+```
+
+
+# Loading the final models for kelp species per-area carbon stocks and production rates
+```{r}
+MP_stock<-readRDS("final_brms/Mpy_stock_final.rds")
+MP_prod<-readRDS("final_brms/Mpy_prod_final.rds")
+# 
+NL_stock<-readRDS("final_brms/Nleu_stock_final.rds")
+NL_prod<-readRDS("final_brms/Nleu_prod_final.rds")
+# 
+CC_stock<-readRDS("final_brms/Cco_stock_final.rds")
+CC_prod<-readRDS("final_brms/Cco_prod_final.rds")
+# 
+AC_stock<-readRDS("final_brms/Acl_stock_final.rds")
+AC_prod<-readRDS("final_brms/Acl_prod_final.rds")
+# 
+LDNI_stock<-readRDS("final_brms/Ldi_Hni_stock_final.rds")
+LDNI_prod<-readRDS("final_brms/Ldi_Hni_prod_final.rds")
+# 
+LS_stock<-readRDS("final_brms/Lso_stock_final.rds")
+LS_prod<-readRDS("final_brms/Lso_prod_final.rds")
+# 
+PC_stock<-readRDS("final_brms/Pca_stock_final.rds")
+PC_prod<-readRDS("final_brms/Pcal_prod_final.rds")
+
+PG_stock<-readRDS("final_brms/Pga_stock_final.rds")
+PG_prod<-readRDS("final_brms/Pga_prod_final.rds")
+# 
+SL_stock<-readRDS("final_brms/Sla_stock_final.rds")
+SL_prod<-readRDS("final_brms/Sla_prod_final.rds")
+
+```
+
+
+# comparing the postior draws to the observed data
+```{r}
+
+pp_MP_stock <- pp_check(MP_stock,ndraws = 100) #+ plot_annotation(subtitle = 'Macrocystis pyrifera')
+pp_NL_stock <- pp_check(NL_stock,ndraws = 100) #+ plot_annotation(subtitle = 'Nereocystis leutkeana')
+pp_CC_stock <- pp_check(CC_stock,ndraws = 100) #+ plot_annotation(subtitle = 'Costaria costata')
+pp_AC_stock <- pp_check(AC_stock,ndraws = 100) #+ plot_annotation(subtitle = 'Agarum clathratum')
+pp_LDNI_stock <- pp_check(LDNI_stock,ndraws = 100) #+ plot_annotation(subtitle = 'L. digitata / H. nigripes')
+pp_LS_stock <- pp_check(LS_stock,ndraws = 100) #+ plot_annotation(subtitle = 'Laminaria solidungula')
+pp_PC_stock <- pp_check(PC_stock,ndraws = 100) #+ plot_annotation(subtitle = 'Pteragophora californica')
+pp_PG_stock <- pp_check(PG_stock,ndraws = 100) #+ plot_annotation(subtitle = 'Pleurophycus gardenari')
+pp_SL_stock <- pp_check(SL_stock,ndraws = 100) #+ plot_annotation(subtitle = 'Saccharina latissima')
+
+
+pdf("plots/FigureB7.pdf",width=7.5,height=4)
+pp_MP_stock+pp_NL_stock+pp_CC_stock+pp_AC_stock+pp_LDNI_stock+pp_LS_stock+pp_PC_stock+pp_PG_stock+pp_SL_stock+plot_annotation(tag_levels = 'a') 
+dev.off()
+
+
+pp_MP_prod <- pp_check(MP_prod,ndraws = 100) #+ plot_annotation(subtitle = 'Macrocystis pyrifera')
+pp_NL_prod <- pp_check(NL_prod,ndraws = 100) #+ plot_annotation(subtitle = 'Nereocystis leutkeana')
+pp_CC_prod <- pp_check(CC_prod,ndraws = 100) #+ plot_annotation(subtitle = 'Costaria costata')
+pp_AC_prod <- pp_check(AC_prod,ndraws = 100) #+ plot_annotation(subtitle = 'Agarum clathratum')
+pp_LDNI_prod <- pp_check(LDNI_prod,ndraws = 100) #+ plot_annotation(subtitle = 'L. digitata / H. nigripes')
+pp_LS_prod<- pp_check(LS_prod,ndraws = 100) #+ plot_annotation(subtitle = 'Laminaria solidungula')
+pp_PC_prod<- pp_check(PC_prod,ndraws = 100) #+ plot_annotation(subtitle = 'Pteragophora californica')
+pp_PG_prod <- pp_check(PG_prod,ndraws = 100) #+ plot_annotation(subtitle = 'Pleurophycus gardenari')
+pp_SL_prod <- pp_check(SL_prod,ndraws = 100) #+ plot_annotation(subtitle = 'Saccharina latissima')
+
+
+pdf("plots/FigureB8.pdf",width=7.5,height=4)
+pp_MP_prod+pp_NL_prod+pp_CC_prod+pp_AC_prod+pp_LDNI_prod+pp_LS_prod+pp_PG_prod+pp_PG_prod+pp_SL_prod+plot_annotation(tag_levels = 'a') 
+dev.off()
+
+
+```
