@@ -1,0 +1,1265 @@
+---
+title: "Estimating Carbon Stocks Associated with Canadian Kelps using BRMs"
+author: "Jennifer McHenry"
+date: "2023-02-23"
+output: html_document
+---
+
+
+```{r,include=FALSE}
+# Setting up Rstan
+
+
+# remove.packages(c("rstan", "StanHeaders"))
+# if (file.exists(".RData")) file.remove(".RData")
+# # #
+
+# install.packages("rstan", repos = c("https://mc-stan.org/r-packages/", getOption("repos")))
+
+# update.packages("rstan")
+library(StanHeaders)
+library(rstan)
+library(collapse)
+# install.packages("collapse")
+
+# example(stan_model, package = "rstan", run.dontrun = TRUE)
+
+# rstan_options(auto_write=TRUE)
+# install.packages("brms", dependencies = TRUE)
+```
+
+```{r,include=FALSE}
+# Load required libraries
+library(brms)         # Bayesian modeling through Stan
+library(tidyverse) # ggplot, dplyr, %>%, and friends
+library(dplyr) 
+library(tidybayes)    # Manipulate Stan objects in a tidy way
+library(broom)        # Convert model objects to data frames
+library(broom.mixed)  # Convert brms model objects to data frames
+library(emmeans)      # Calculate marginal effects in even fancier ways
+library(patchwork)    # Combine ggplot objects
+library(ggokabeito)   # Neat accessible color palette
+library(gghalves)     # Special half geoms
+library(ggbeeswarm)   # Special distribution-shaped point jittering
+library(HDInterval)
+library(marginaleffects)
+library(performance)
+library(loo)
+library(bayesplot)
+library(bayestestR)
+
+theme_clean <- function() {
+  theme_minimal(base_family = "News Cycle") +
+    theme(panel.grid.minor = element_blank(),
+          plot.title = element_text(face = "bold"),
+          axis.title = element_text(face = "bold"),
+          strip.text = element_text(face = "bold", size = rel(1), hjust = 0),
+          strip.background = element_rect(fill = "grey80", color = NA),
+          legend.title = element_text(face = "bold"))
+}
+
+
+theme_publish <- function(base_size = 12, base_family = "",
+                          base_line_size = 0.25, ...) {
+  half_line <- base_size / 2
+  small_rel <- 0.8
+  small_size <- small_rel * base_size
+  
+  # TODO: replace size with linewidth in `element_rect()`
+  theme_bw(base_size = base_size, base_family = base_family, ...) %+replace%
+    theme(
+      rect = element_rect(fill = "transparent", colour = NA, color = NA,
+                          size = 0, linetype = 0),
+      text = element_text(family = base_family, face = "plain",
+                          colour = "black", size = base_size, hjust = 0.5,
+                          vjust = 0.5, angle = 0, lineheight = 0.9,
+                          margin = ggplot2::margin(), debug = F),
+      
+      axis.text = element_text(size = small_size),
+      axis.text.x = element_text(margin = ggplot2::margin(t = small_size/4),
+                                 vjust = 1),
+      axis.text.y = element_text(margin = ggplot2::margin(r = small_size/4), 
+                                 hjust = 1),
+      axis.title.x = element_text(margin = ggplot2::margin(t = small_size,
+                                                           b = small_size)),
+      axis.title.y = element_text(angle = 90,
+                                  margin = ggplot2::margin(r = small_size,
+                                                           l = small_size/4)),
+      axis.ticks = element_line(colour = "black", size = base_line_size),
+      axis.ticks.length = unit(0.25, 'lines'),
+      
+      axis.line = element_line(colour = "black", size = base_line_size),
+      axis.line.x = element_line(colour = "black", size = base_line_size), 
+      axis.line.y = element_line(colour = "black", size = base_line_size), 
+      
+      legend.spacing = unit(base_size/4, "pt"),
+      legend.key = element_blank(),
+      legend.key.size = unit(1 * base_size, "pt"),
+      legend.key.width = unit(1.5 * base_size, 'pt'),
+      legend.text = element_text(size = rel(small_rel)),
+      legend.title = element_text(size = rel(small_rel), face = 'bold'),
+      legend.position = 'bottom',
+      legend.box = 'horizontal',
+      
+      panel.spacing = unit(1, "lines"),
+      panel.background = element_blank(),
+      panel.border = element_blank(), 
+      # panel.grid.major = element_blank(),
+      # panel.grid.minor = element_blank(),
+      # 
+      strip.text = element_text(size = base_size),
+      strip.background = element_rect(fill = NA, colour = "black",
+                                      size = 0.125),
+      strip.text.x = element_text(face = 'bold', hjust = 0,
+                                  margin = ggplot2::margin(b = small_size/2,
+                                                           t = small_size/4)),
+      strip.text.y = element_text(angle = -90, face = 'bold',
+                                  margin = ggplot2::margin(l = small_size/2,
+                                                           r = small_size/4)),
+      
+      plot.margin = unit(c(5,5,0,0), "pt"),
+      plot.background = element_blank(),
+      plot.title = element_text(face = "bold", size = 1.2 * base_size, 
+                                margin = ggplot2::margin(b = half_line),
+                                hjust = 0)
+    )
+}
+```
+
+# Bayesian Model Sources
+```{r}
+# https://vasishth.github.io/bayescogsci/book/ch-remame.html
+
+# https://www.rdocumentation.org/packages/brms/versions/0.9.1/topics/brm
+
+# https://vincentarelbundock.github.io/marginaleffects/articles/brms.html
+
+# https://paul-buerkner.github.io/brms/reference/posterior_summary.html
+
+# https://www.andrewheiss.com/blog/2021/11/10/ame-bayes-re-guide/#different-kinds-of-average-predictions-with-multilevel-models
+```
+
+
+# Data 
+```{r,include=FALSE}
+C_Stocks_Collated_DF<-read.csv("final_collated_data/collated_kelp_biomass_density_df.csv")
+
+Biomass_final_df <- read.csv("processed_data/SST_PAR_of_Biomass_Sites.csv")
+names(Biomass_final_df) <-c("ID","Site.Name","Year","APA.Citation","Mean_PAR_BioOracle","Mean_SST_BioOracle")
+
+C_Stocks_Collated_DF <- left_join(C_Stocks_Collated_DF,Biomass_final_df,by=c("Site.Name","Year","APA.Citation"))
+
+```
+
+```{r,results = FALSE}
+C_stock_model_data <- data.frame(
+  ocean= C_Stocks_Collated_DF$Coast, #Arctic, Atlantic, Pacific
+  canopy_type=as.character(C_Stocks_Collated_DF$Canopy_Type),# surface vs subsurface
+  site = C_Stocks_Collated_DF$Site.Name,  # Site identifier
+  year = C_Stocks_Collated_DF$Year,
+  month = C_Stocks_Collated_DF$Month,
+  season = C_Stocks_Collated_DF$Season,
+  decade= C_Stocks_Collated_DF$Decade,
+  depth_bin = C_Stocks_Collated_DF$Depth,
+  ocean_temperature = as.numeric(C_Stocks_Collated_DF$Mean_SST_BioOracle),
+  PAR = as.numeric(C_Stocks_Collated_DF$Mean_PAR_BioOracle),
+  taxa = C_Stocks_Collated_DF$Taxa, #species
+  latitude=as.numeric(C_Stocks_Collated_DF$Latitude),
+  effect = C_Stocks_Collated_DF$Standing.Stock.Corg.MgHa.1,  # Site or study level mean
+  sd = C_Stocks_Collated_DF$Standing.Stock.Corg.MgHa.1.SD,
+  source=C_Stocks_Collated_DF$APA.Citation)%>% # Site or study level sd on the mean 
+  mutate(observation_id = 1:n(), 
+         # sd=ifelse(sd==0,NA,sd))%>%
+          sd=ifelse(is.na(sd)==TRUE,0,sd))%>%
+    filter(taxa == "A. clathratum / N. fimbriatum"|
+             taxa == "Macrocystis pyrifera" |
+             taxa == "Nereocystis luetkeana" |
+             taxa == "Saccharina latissima" |
+             taxa == "Pleurophycus gardneri" |
+             taxa == "Pterygophora californica" |
+             taxa == "Hedophyllum nigripes"|
+             taxa=="Laminaria digitata"|
+             taxa == "L. digitata / H. nigripes"|
+             taxa == "Laminaria solidungula"|
+             # taxa == "Laminaria setchellii" |
+            #Only one record available
+             # Taxa == "Eisenia arborea"| ## Eisenia data is too hot for Canada
+             taxa == "Costaria costata")%>%
+             # taxa =="Cymathaere triplicata")
+    filter(season!="Fall")%>%
+  mutate(taxa=ifelse(taxa=="Hedophyllum nigripes" |taxa=="Laminaria digitata","L. digitata / H. nigripes",taxa))%>%
+  mutate(ocean_temperature=ifelse(is.na(ocean_temperature)==TRUE & site=="Zaikof Point", 8.030507,ocean_temperature))%>%
+  mutate(ocean_temperature= ifelse(is.na(ocean_temperature)==TRUE & site=="Evans Island",7.626471,ocean_temperature))%>%
+  mutate(ocean_temperature=ifelse(is.na(ocean_temperature)==TRUE, 10.5,ocean_temperature))%>%
+  mutate(PAR=ifelse(is.na(PAR)==TRUE & site=="Zaikof Point",28.885000,PAR))%>%
+  mutate(PAR=ifelse(is.na(ocean_temperature)==TRUE & site=="Evans Island",27.240999,PAR))%>%
+  mutate(PAR=ifelse((PAR)==TRUE,31.5,PAR))
+                                                                 
+                                  
+#splitting the data by species
+C_stock_model_data_sppsplit <-C_stock_model_data%>%
+  dplyr::group_by(taxa)
+
+C_stock_model_data_sppsplit<-group_split(C_stock_model_data_sppsplit)
+
+```
+
+```{r,results = FALSE}
+#Carbon Stock DF
+str(C_stock_model_data)
+
+```
+
+# Summary Stats
+```{r,echo=FALSE}
+# By Species
+C_stock_model_data%>%
+    # group_by(ocean,taxa)%>%
+    group_by(taxa)%>%
+  dplyr::summarise(mean=mean(effect),max=max(effect),upper=quantile(effect,probs= 0.75),lower=quantile(effect, probs= 0.25), min=min(effect), sd=sd(effect), n=length(effect), se=sd/sqrt(n),cv=sd/mean*100)%>%
+  arrange(-mean)
+
+```
+
+
+# Setting up the priors
+```{r}
+#for intercept only models
+priors_IO<- c(prior(student_t(3,0,9), class = Intercept),
+             prior(student_t(3,0,9), class = sigma))
+
+
+#for mixed effects models
+priors_FE<- c(prior(student_t(3,0,9), class = Intercept),
+              prior(student_t(3,0,9),class=b),
+              prior(student_t(3,0,9), class = sigma))
+
+
+load(file="Rdata/Carbon_Stock_BRMs.RData")
+
+```
+
+# C STANDING STOCK MODELS - 
+## Macrocystis pyrifera
+```{r,results = FALSE}
+Mpyr_C_stock_df <- C_stock_model_data_sppsplit[[5]]
+
+Mpyr_C_stock_test_df<-Mpyr_C_stock_df%>%
+  # select(ocean,sd,ocean_temperature)%>%
+  # mutate(sd=as.integer(sd),ocean_temperature=as.integer(ocean_temperature))
+  select(ocean,sd,ocean_temperature)%>%
+  mutate(sd=as.integer(sd))
+
+
+Mpyr_C_stock_test_df<-unique(Mpyr_C_stock_test_df)
+Mpyr_C_stock_test_df$site <- NA
+Mpyr_C_stock_test_df$source <- NA
+Mpyr_C_stock_test_df$year <- NA
+# 
+Mpyr.stock.1 <- brm(data = Mpyr_C_stock_df,
+                  family= gaussian,
+                  formula = effect | resp_se(`sd`,sigma = TRUE) ~ ocean_temperature + (1 | year) + (1 |site),
+                  prior = priors_FE,
+                  control = list(
+                    adapt_delta = .99,
+                    max_treedepth = 15),
+                  sample_prior = TRUE,
+                  iter=5000, warmup=2500, chains = 3)
+
+Mpyr.stock.2 <- brm(data = Mpyr_C_stock_df,
+                  family= gaussian,
+                  formula = effect | resp_se(`sd`,sigma = TRUE) ~  (1 | year) + (1 |site),
+                  prior = priors_IO,
+                  control = list(
+                    adapt_delta = .99,
+                    max_treedepth = 15),
+                  sample_prior = TRUE,
+                  iter=5000, warmup=2500, chains = 3)
+```
+
+```{r}
+loo(Mpyr.stock.1,Mpyr.stock.2)
+
+Mpyr.stock.final <- Mpyr.stock.2
+
+#save model output object
+saveRDS(Mpyr.stock.final, file="final_brms/Mpy_stock_final.rds")
+
+
+performance::r2(Mpyr.stock.final)
+
+summary(Mpyr.stock.final)
+
+# conditional_effects(Mpyr.stock.final)
+plot(Mpyr.stock.final, ask = FALSE)
+
+# Comparing priors to posteriors
+Mpyr_priors <- prior_draws(Mpyr.stock.final)
+Mpyr_post<- as.data.frame(Mpyr.stock.final)
+
+ggplot() +
+  geom_density(data = Mpyr_priors, aes(x = Intercept)) +
+  geom_density(data = Mpyr_post, aes(x = b_Intercept), color = "blue") +
+  labs(title = "Prior Distribution vs. Posterior Distribution") +
+  xlim(-30,  30) +
+  theme_classic()
+
+# Comparing prior predictive check plots - for model accuracy
+pp_check(Mpyr.stock.final)
+
+#grand means
+Mpyr.epred <- Mpyr.stock.final %>%
+  epred_draws(newdata = Mpyr_C_stock_test_df,
+              re_formula = NA)
+
+avg_predictions(model = Mpyr.stock.final,by="ocean",newdata=Mpyr_C_stock_df,conf_level = 0.95)
+# Mpyr.stock.final %>% 
+#   emmeans(~ 1,
+#           # at = list(ocean = "Pacific"),
+#           epred = TRUE, re_formula = NA) %>% 
+#   # contrast(method = "revpairwise") %>% 
+#   gather_emmeans_draws()%>%
+#   mean_hdci()
+
+ggplot(Mpyr.epred, aes(x = .epred,y=ocean,fill=ocean)) +
+  stat_halfeye() +
+  scale_fill_okabe_ito() +
+  labs(x = "Predicted C Stock (Mg C Ha-1)", y = NULL,
+       # fill = "Ocean",
+       subtitle = "Macrocystis pyrifera - Posterior predictions") +
+  theme_clean() +
+  theme(legend.position = "bottom")
+
+# Bayes tests
+
+# #describing the full posterior distribution
+# Mpyr_estimates <- as.data.frame(describe_posterior(Mpyr.stock.final,centrality="mean"))
+# Mpyr_estimates$taxa <- c("Macrocystis pyrifera")
+# 
+# Mpyr_estimates
+# 
+# avg_predictions(model = Mpyr.stock.final,by="ocean",newdata=Mpyr_C_stock_df)
+# 
+# write.csv(Mpyr_estimates,file="outputs/Mpyr_C_stock_estimates.csv")
+```
+
+## Nereocystis leutkeana
+```{r,results = FALSE}
+Nleu_C_stock_df <- C_stock_model_data_sppsplit[[6]]#%>%
+  # filter(is.na(latitude)==FALSE)
+
+Nleu_c_stock_test_df<-Nleu_C_stock_df%>%
+  select(ocean,sd,ocean_temperature)%>%
+  mutate(sd=as.integer(sd)) 
+
+Nleu_c_stock_test_df<-unique(Nleu_c_stock_test_df)
+Nleu_c_stock_test_df$site <- NA
+Nleu_c_stock_test_df$source <- NA
+Nleu_c_stock_test_df$year <- NA
+
+
+
+Nleu.stock.1 <- brm(data = Nleu_C_stock_df,
+                  family= gaussian,
+                  formula = effect | resp_se(`sd`,sigma = TRUE) ~  ocean_temperature + (1 | year) + (1 |site),
+                  prior = priors_FE,
+                  control = list(
+                    adapt_delta = .99,
+                    max_treedepth = 15),
+                  sample_prior = TRUE,
+                  iter=5000, warmup=2500, chains = 3)
+
+
+Nleu.stock.2 <- brm(data = Nleu_C_stock_df,
+                  family= gaussian,
+                  formula = effect | resp_se(`sd`,sigma = TRUE) ~  (1 | year) + (1 |site),
+                  prior = priors_IO,
+                  control = list(
+                    adapt_delta = .99,
+                    max_treedepth = 15),
+                  sample_prior = TRUE,
+                  iter=5000, warmup=2500, chains = 3)
+
+```
+
+```{r}
+                  
+loo(Nleu.stock.1, Nleu.stock.2)
+
+Nleu.stock.final <- Nleu.stock.1
+
+#save model output object
+saveRDS(Nleu.stock.final, file="final_brms/Nleu_stock_final.rds")
+
+
+performance::r2(Nleu.stock.final)
+
+summary(Nleu.stock.final)
+
+plot(Nleu.stock.final, ask = FALSE)
+# conditional_effects(Nleu.stock.final)
+
+# Comparing priors to posteriors
+Nleu_priors <- prior_draws(Nleu.stock.final)
+Nleu_post<- as.data.frame(Nleu.stock.final)
+
+ggplot() +
+  geom_density(data = Nleu_priors, aes(x = Intercept)) +
+  geom_density(data = Nleu_post, aes(x = b_Intercept), color = "blue") +
+  labs(title = "Prior Distribution vs. Posterior Distribution") +
+  # xlim(-30,  30) +
+  theme_classic()
+
+# Comparing prior predictive check plots - for model accuracy
+pp_check(Nleu.stock.final)
+
+
+# grand mean predictions
+
+#grand means
+Nleu.epred <- Nleu.stock.final %>%
+  epred_draws(newdata = Nleu_c_stock_test_df,
+              re_formula = NA)
+
+avg_predictions(model = Nleu.stock.final,by="ocean",newdata=Nleu_C_stock_df,conf_level = 0.95)
+
+# Nleu.stock.final %>% 
+#   emmeans(~ 1,
+#           # at = list(ocean = "Pacific"),
+#           epred = TRUE, re_formula = NA) %>% 
+#   # contrast(method = "revpairwise") %>% 
+#   gather_emmeans_draws()%>%
+#   mean_hdci()
+
+ggplot(Nleu.epred, aes(x = .epred,y=ocean, fill=ocean)) +
+  stat_halfeye() +
+  scale_fill_okabe_ito() +
+  labs(x = "Predicted C Stock (Mg C Ha-1)", y = NULL,
+       # fill = "Ocean",
+       subtitle = "Nereocystis leutkeana - Posterior predictions") +
+  theme_clean() +
+  theme(legend.position = "bottom")
+
+# Bayes tests
+
+# #describing the full posterior distribution
+# Nleu_estimates <- as.data.frame(describe_posterior(Nleu.stock.final,centrality="mean"))
+# Nleu_estimates$taxa <- c("Nereocystis leutkeana")
+# 
+# Nleu_estimates
+# 
+# avg_predictions(model = Nleu.stock.final,by="ocean",newdata=Nleu_C_stock_df)
+# 
+# # write.csv(Nleu_estimates,file="output/Nleu_C_stock_estimates.csv")
+
+
+```
+
+## Agarum clathratum / Neoagarum fimbriatum 
+```{r,results = FALSE}
+Aclath_C_stock_df <- C_stock_model_data_sppsplit[[1]]
+  # filter(is.na(latitude)==FALSE)
+
+Alcath_c_stock_test_df<-Aclath_C_stock_df%>%
+  select(ocean,sd,ocean_temperature)%>%
+  mutate(sd=as.integer(sd))
+
+Alcath_c_stock_test_df<-unique(Alcath_c_stock_test_df)
+Alcath_c_stock_test_df$site <- NA
+Alcath_c_stock_test_df$source <- NA
+Alcath_c_stock_test_df$year <- NA
+
+
+Aclath.stock.1 <- brm(data = Aclath_C_stock_df,
+                  family= gaussian,
+                  formula = effect | resp_se(`sd`,sigma = TRUE) ~ ocean_temperature + ocean + (1|year)+ (1 |site),
+                  prior = priors_FE,
+                  control = list(
+                    adapt_delta = .99,
+                    max_treedepth = 15),
+                  sample_prior = TRUE,
+                  iter=5000, warmup=2500, chains = 3)
+
+Aclath.stock.2 <- brm(data = Aclath_C_stock_df,
+                  family= gaussian,
+                  formula = effect | resp_se(`sd`,sigma = TRUE) ~  ocean_temperature + (1|year)+ (1 |site),
+                  prior = priors_FE,
+                  control = list(
+                    adapt_delta = .99,
+                    max_treedepth = 15),
+                  sample_prior = TRUE,
+                  iter=5000, warmup=2500, chains = 3)
+
+Aclath.stock.3 <- brm(data = Aclath_C_stock_df,
+                  family= gaussian,
+                  formula = effect | resp_se(`sd`,sigma = TRUE) ~  ocean + (1|year)+ (1 |site),
+                  prior = priors_FE,
+                  control = list(
+                    adapt_delta = .99,
+                    max_treedepth = 15),
+                  sample_prior = TRUE,
+                  iter=5000, warmup=2500, chains = 3)
+
+Aclath.stock.4 <-brm(data = Aclath_C_stock_df,
+                  family= gaussian,
+                  formula = effect | resp_se(`sd`,sigma = TRUE) ~  (1|year)+ (1 |site),
+                  prior = priors_IO,
+                  control = list(
+                    adapt_delta = .99,
+                    max_treedepth = 15),
+                  sample_prior = TRUE,
+                  iter=5000, warmup=2500, chains = 3)
+```
+
+```{r}
+loo(Aclath.stock.1,Aclath.stock.2,Aclath.stock.3,Aclath.stock.4)
+
+Aclah.stock.final <- Aclath.stock.2
+
+#save model output object
+saveRDS(Aclah.stock.final, file="final_brms/Acl_stock_final.rds")
+
+performance::r2(Aclah.stock.final)
+
+summary(Aclah.stock.final)
+
+# conditional_effects(Aclah.stock.final)
+
+plot(Aclah.stock.final, ask = FALSE)
+
+# Comparing priors to posteriors
+Aclath_priors <- prior_draws(Aclah.stock.final)
+Aclath_post<- as.data.frame(Aclah.stock.final)
+
+ggplot() +
+  geom_density(data = Aclath_priors, aes(x = Intercept)) +
+  geom_density(data = Aclath_post, aes(x = b_Intercept), color = "blue") +
+  labs(title = "Prior Distribution vs. Posterior Distribution") +
+  xlim(-30,  30) +
+  theme_classic()
+
+# Comparing prior predictive check plots - for model accuracy
+pp_check(Aclah.stock.final)
+
+
+# grand mean predictions
+
+#grand means
+Aclath.epred <- Aclah.stock.final %>%
+  epred_draws(newdata = Alcath_c_stock_test_df,
+              re_formula = NA)
+
+avg_predictions(model = Aclah.stock.final,by="ocean",newdata=Aclath_C_stock_df)
+
+# Aclah.stock.final %>% 
+#   emmeans(~ ocean,
+#           # at = list(ocean = "Pacific"),
+#           epred = TRUE, re_formula = NA) %>% 
+#   # contrast(method = "revpairwise") %>% 
+#   gather_emmeans_draws()%>%
+#   mean_hdci()
+
+ggplot(Aclath.epred, aes(x = .epred,y=ocean,fill=ocean)) +
+  stat_halfeye() +
+  scale_fill_okabe_ito() +
+  labs(x = "Predicted C Stock (Mg C Ha-1)", y = NULL,
+       # fill = "Ocean",
+       subtitle = "A. clathratum / N. fimbriatum - Posterior predictions") +
+  theme_clean() +
+  theme(legend.position = "bottom")
+
+# # Bayes tests
+#
+# #describing the full posterior distribution
+# Aclath_estimates <- as.data.frame(describe_posterior(Aclah.stock.final,centrality="mean"))
+# Aclath_estimates$taxa <- c("A. clathratum / N; fimbriatum")
+
+# Aclath_estimates
+
+
+# write.csv(Aclath_estimates,file="output/Aclath_C_stock_estimates.csv")
+
+```
+
+
+## Costaria costata
+```{r,results = FALSE}
+Ccost_C_stock_df <- C_stock_model_data_sppsplit[[2]]
+  # filter(is.na(latitude)==FALSE)
+
+Ccost_c_stock_test_df<-Ccost_C_stock_df%>%
+  select(ocean,sd,ocean_temperature)%>%
+  mutate(sd=as.integer(sd))
+
+Ccost_c_stock_test_df<-unique(Ccost_c_stock_test_df)
+Ccost_c_stock_test_df$site <- NA
+Ccost_c_stock_test_df$source <- NA
+Ccost_c_stock_test_df$year <- NA
+
+
+Ccost.stock.1 <- brm(data = Ccost_C_stock_df,
+                  family= gaussian,
+                  formula = effect | resp_se(`sd`,sigma = TRUE) ~ ocean_temperature +(1| year) + (1 |site),
+                  prior = priors_FE,
+                  control = list(
+                    adapt_delta = .99,
+                    max_treedepth = 15),
+                  sample_prior = TRUE,
+                  iter=5000, warmup=2500, chains = 3)
+
+Ccost.stock.2 <- brm(data = Ccost_C_stock_df,
+                  family= gaussian,
+                  formula = effect | resp_se(`sd`,sigma = TRUE) ~ (1| year) + (1 |site),
+                  prior = priors_IO,
+                  control = list(
+                    adapt_delta = .99,
+                    max_treedepth = 15),
+                  sample_prior = TRUE,
+                  iter=5000, warmup=2500, chains = 3)
+```
+
+```{r}
+loo(Ccost.stock.1,Ccost.stock.2)
+
+Ccost.stock.final <- Ccost.stock.2
+saveRDS(Ccost.stock.final, file="final_brms/Cco_stock_final.rds")
+
+performance::r2(Ccost.stock.final)
+
+summary(Ccost.stock.final)
+
+
+plot(Ccost.stock.final, ask = FALSE)
+
+# Comparing priors to posteriors
+Ccost_priors <- prior_draws(Ccost.stock.final)
+Ccost_post<- as.data.frame(Ccost.stock.final)
+
+ggplot() +
+  geom_density(data = Ccost_priors, aes(x = Intercept)) +
+  geom_density(data = Ccost_post, aes(x = b_Intercept), color = "blue") +
+  labs(title = "Prior Distribution vs. Posterior Distribution") +
+  xlim(-30,  30) +
+  theme_classic()
+
+# Comparing prior predictive check plots - for model accuracy
+pp_check(Ccost.stock.final)
+
+
+# grand mean predictions
+
+#grand means
+Ccost.epred <- Ccost.stock.final %>%
+  epred_draws(newdata = Ccost_c_stock_test_df,
+              re_formula = NA)
+
+avg_predictions(model = Ccost.stock.final,by="ocean",newdata=Ccost_C_stock_df)
+
+# Ccost.stock.final %>% 
+#   emmeans(~ 1,
+#           # at = list(ocean = "Pacific"),
+#           epred = TRUE, re_formula = NA) %>% 
+#   # contrast(method = "revpairwise") %>% 
+#   gather_emmeans_draws()%>%
+#   mean_hdci()
+
+ggplot(Ccost.epred, aes(x = .epred,y=ocean,fill=ocean)) +
+  stat_halfeye() +
+  scale_fill_okabe_ito() +
+  labs(x = "Predicted C Stock (Mg C Ha-1)", y = NULL,
+       # fill = "Ocean",
+       subtitle = "Costaria costata - Posterior predictions") +
+  theme_clean() +
+  theme(legend.position = "bottom")
+
+
+# # Bayes tests
+# 
+# #describing the full posterior distribution
+# Ccost_estimates <- as.data.frame(describe_posterior(Ccost.stock.final,centrality="mean"))
+# Ccost_estimates$taxa <- c("Costaria costata")
+
+# Ccost_estimates
+
+# write.csv(Ccost_estimates,file = "outputs/Ccost_C_stock_estimates.csv")
+
+```
+
+## Laminaria digitata / Hedophyllum nigripes
+```{r,results = FALSE}
+LdigHnig_C_stock_df <- C_stock_model_data_sppsplit[[3]]
+
+LdigHnig_c_stock_test_df<-LdigHnig_C_stock_df%>%
+  select(ocean,sd,ocean_temperature)%>%
+  mutate(sd=as.integer(sd))
+
+LdigHnig_c_stock_test_df<-unique(LdigHnig_c_stock_test_df)
+LdigHnig_c_stock_test_df$site <- NA
+LdigHnig_c_stock_test_df$source <- NA
+LdigHnig_c_stock_test_df$year <- NA
+
+
+LdigHnig.stock.1 <- brm(data = LdigHnig_C_stock_df,
+                  family= gaussian,
+                  formula = effect | resp_se(`sd`,sigma = TRUE) ~  ocean_temperature + ocean + (1| year)+ (1 |site),
+                  prior = priors_FE,
+                  control = list(
+                    adapt_delta = .99,
+                    max_treedepth = 15),
+                  iter=5000, warmup=2500, chains = 3)
+
+LdigHnig.stock.2 <- brm(data = LdigHnig_C_stock_df,
+                  family= gaussian,
+                  formula = effect | resp_se(`sd`,sigma = TRUE) ~   ocean_temperature + (1| year)+ (1 |site),
+                  prior = priors_FE,
+                  control = list(
+                    adapt_delta = .99,
+                    max_treedepth = 15),
+                  sample_prior = TRUE,
+                  iter=5000, warmup=2500, chains = 3)
+
+LdigHnig.stock.3 <- brm(data = LdigHnig_C_stock_df,
+                  family= gaussian,
+                  formula = effect | resp_se(`sd`,sigma = TRUE) ~   ocean + (1| year)+ (1 |site),
+                  prior = priors_FE,
+                  control = list(
+                    adapt_delta = .99,
+                    max_treedepth = 15),
+                  sample_prior = TRUE,
+                  iter=5000, warmup=2500, chains = 3)
+
+LdigHnig.stock.4 <- brm(data = LdigHnig_C_stock_df,
+                  family= gaussian,
+                  formula = effect | resp_se(`sd`,sigma = TRUE) ~   (1| year)+ (1 |site),
+                  prior = priors_IO,
+                  control = list(
+                    adapt_delta = .99,
+                    max_treedepth = 15),
+                  sample_prior = TRUE,
+                  iter=5000, warmup=2500, chains = 3)
+
+```
+
+```{r}
+
+loo(LdigHnig.stock.1,LdigHnig.stock.2,LdigHnig.stock.3,LdigHnig.stock.4)
+
+LdigHnig.stock.final <- LdigHnig.stock.2
+
+#save model output object
+saveRDS(LdigHnig.stock.final, file="final_brms/Ldi_Hni_stock_final.rds")
+
+performance::r2(LdigHnig.stock.final)
+
+summary(LdigHnig.stock.final)
+
+# conditional_effects(LdigHnig.stock.final)
+
+plot(LdigHnig.stock.final, ask = FALSE)
+
+# Comparing priors to posteriors
+LdigHnig_priors <- prior_draws(LdigHnig.stock.final)
+LdigHnig_post<- as.data.frame(LdigHnig.stock.final)
+
+ggplot() +
+  geom_density(data = LdigHnig_priors, aes(x = Intercept)) +
+  geom_density(data = LdigHnig_post, aes(x = b_Intercept), color = "blue") +
+  labs(title = "Prior Distribution vs. Posterior Distribution") +
+  xlim(-30,  30) +
+  theme_classic()
+
+# Comparing prior predictive check plots - for model accuracy
+pp_check(LdigHnig.stock.final)
+
+
+# grand mean predictions
+
+#grand means
+LdigHnig.epred <- LdigHnig.stock.final %>%
+  epred_draws(newdata = LdigHnig_c_stock_test_df,
+              re_formula = NA)
+
+avg_predictions(model = LdigHnig.stock.final,by="ocean",newdata=LdigHnig_C_stock_df)
+
+avg_predictions(model = LdigHnig.stock.final,newdata=LdigHnig_C_stock_df)
+
+# LdigHnig.stock.final %>% 
+#   emmeans(~ ocean,
+#           # at = list(ocean = "Pacific"),
+#           epred = TRUE, re_formula = NA) %>% 
+#   # contrast(method = "revpairwise") %>% 
+#   gather_emmeans_draws()%>%
+#   mean_hdci()
+
+ggplot(LdigHnig.epred, aes(x = .epred,y=ocean,fill=ocean)) +
+  stat_halfeye() +
+  scale_fill_okabe_ito() +
+  labs(x = "Predicted C Stock (Mg C Ha-1)", y = NULL,
+       # fill = "Ocean",
+       subtitle = "L. digitata / H. nigripes - Posterior predictions") +
+  theme_clean() +
+  theme(legend.position = "bottom")
+# 
+# #describing the full posterior distribution
+# LdigHnig_estimates <- as.data.frame(describe_posterior(LdigHnig.stock.final,centrality="mean"))
+# LdigHnig_estimates$taxa <- c("L. digitata / H. nigripes")
+
+# LdigHnig_estimates
+
+# write.csv(LdigHnig_estimates,file = "outputs/LdigHnig_C_stock_estimates.csv")
+
+```
+
+
+## Laminaria solidungula
+```{r,results = FALSE}
+Lsol_C_stock_df <- C_stock_model_data_sppsplit[[4]]
+
+Lsol_c_stock_test_df<-Lsol_C_stock_df%>%
+  select(ocean,sd,ocean_temperature)%>%
+  mutate(sd=as.integer(sd))
+
+Lsol_c_stock_test_df<-unique(Lsol_c_stock_test_df)
+Lsol_c_stock_test_df$site <- NA
+Lsol_c_stock_test_df$source <- NA
+Lsol_c_stock_test_df$year <- NA
+
+Lsol.stock.1 <- brm(data = Lsol_C_stock_df,
+                  family= gaussian,
+                  formula = effect | resp_se(`sd`,sigma = TRUE) ~ ocean_temperature + (1 |site),
+                  prior = priors_FE,
+                  control = list(
+                    adapt_delta = .99,
+                    max_treedepth = 15),
+                  sample_prior = TRUE,
+                  iter=5000, warmup=2500, chains = 3)
+
+Lsol.stock.2 <- brm(data = Lsol_C_stock_df,
+                  family= gaussian,
+                  formula = effect | resp_se(`sd`,sigma = TRUE) ~  (1 |site),
+                  prior = priors_IO,
+                  control = list(
+                    adapt_delta = .99,
+                    max_treedepth = 15),
+                  sample_prior = TRUE,
+                  iter=5000, warmup=2500, chains = 3)
+```
+
+```{r}
+loo(Lsol.stock.1,Lsol.stock.2)
+
+Lsol.stock.final <-Lsol.stock.2
+
+#save model output object
+saveRDS(Lsol.stock.final, file="final_brms/Lso_stock_final.rds")
+
+performance::r2(Lsol.stock.final)
+
+summary(Lsol.stock.final)
+
+# conditional_effects(Lsol.stock.final)
+
+plot(Lsol.stock.final, ask = FALSE)
+
+# Comparing priors to posteriors
+Lsol_priors <- prior_draws(Lsol.stock.final)
+Lsol_post<- as.data.frame(Lsol.stock.final)
+
+ggplot() +
+  geom_density(data = Lsol_priors, aes(x = Intercept)) +
+  geom_density(data = Lsol_post, aes(x = b_Intercept), color = "blue") +
+  labs(title = "Prior Distribution vs. Posterior Distribution") +
+  xlim(-30,  30) +
+  theme_classic()
+
+# Comparing prior predictive check plots - for model accuracy
+pp_check(Lsol.stock.final)
+
+
+# grand mean predictions
+
+#grand means
+Lsol.epred <- Lsol.stock.final %>%
+  epred_draws(newdata = Lsol_c_stock_test_df,
+              re_formula = NA)
+
+avg_predictions(model = Lsol.stock.final,by="ocean",newdata=Lsol_C_stock_df)
+
+
+# Lsol.stock.final %>% 
+  # emmeans(~ 1,
+  #         # at = list(ocean = "Pacific"),
+  #         epred = TRUE, re_formula = NA) %>% 
+  # # contrast(method = "revpairwise") %>% 
+  # gather_emmeans_draws()%>%
+  # mean_hdci()
+
+
+ggplot(Lsol.epred, aes(x = .epred,y=ocean,fill=ocean)) +
+  stat_halfeye() +
+  scale_fill_okabe_ito() +
+  labs(x = "Predicted C Stock (Mg C Ha-1)", y = NULL,
+       # fill = "Ocean",
+       subtitle = "Laminaria solidungula - Posterior predictions") +
+  theme_clean() +
+  theme(legend.position = "bottom")
+
+# #describing the full posterior distribution
+# Lsol_estimates <- as.data.frame(describe_posterior(Lsol.stock.final,centrality="mean"))
+# Lsol_estimates$taxa <- c("Laminaria solidungula")
+
+# Lsol_estimates
+
+# write.csv(Lsol_estimates,file = "outputs/Lsol_C_stock_estimates.csv")
+
+```
+
+
+## Pleurophycus gardneri
+```{r,results = FALSE}
+Pgar_C_stock_df <- C_stock_model_data_sppsplit[[7]]#
+
+Pgar_c_stock_test_df<-Pgar_C_stock_df%>%
+  select(ocean,sd,ocean_temperature)%>%
+  mutate(sd=as.integer(sd))
+
+Pgar_c_stock_test_df<-unique(Pgar_c_stock_test_df)
+Pgar_c_stock_test_df$site <- NA
+Pgar_c_stock_test_df$source <- NA
+Pgar_c_stock_test_df$year <- NA
+
+Pgar.stock.1 <-  brm(data = Pgar_C_stock_df,
+                  family= gaussian,
+                  formula = effect | resp_se(`sd`,sigma = TRUE) ~ ocean_temperature + (1| year)  + (1 |site),
+                  prior = priors_FE,
+                  control = list(
+                    adapt_delta = .99,
+                    max_treedepth = 15),
+                  sample_prior = TRUE,
+                  iter=5000, warmup=2500, chains = 3)
+
+Pgar.stock.2 <-  brm(data = Pgar_C_stock_df,
+                  family= gaussian,
+                  formula = effect | resp_se(`sd`,sigma = TRUE) ~ (1| year)  + (1 |site),
+                  prior = priors_IO,
+                  control = list(
+                    adapt_delta = .99,
+                    max_treedepth = 15),
+                  sample_prior = TRUE,
+                  iter=5000, warmup=2500, chains = 3)
+```
+
+```{r}
+loo(Pgar.stock.1,Pgar.stock.2)
+
+Pgar.stock.final <- Pgar.stock.2
+
+#save model output object
+saveRDS(Pgar.stock.final, file="final_brms/Pga_stock_final.rds")
+
+performance::r2(Pgar.stock.final)
+
+# conditional_effects(Pgar.stock.final)
+
+summary(Pgar.stock.final)
+
+plot(Pgar.stock.final, ask = FALSE)
+
+# Comparing priors to posteriors
+Pgar_priors <- prior_draws(Pgar.stock.final)
+Pgar_post<- as.data.frame(Pgar.stock.final)
+
+ggplot() +
+  geom_density(data = Pgar_priors, aes(x = Intercept)) +
+  geom_density(data = Pgar_post, aes(x = b_Intercept), color = "blue") +
+  labs(title = "Prior Distribution vs. Posterior Distribution") +
+  xlim(-30,  30) +
+  theme_classic()
+
+# Comparing prior predictive check plots - for model accuracy
+pp_check(Pgar.stock.final)
+
+
+# grand mean predictions
+
+#grand means
+Pgar.epred <- Pgar.stock.final %>%
+  epred_draws(newdata = Pgar_c_stock_test_df,
+              re_formula = NA)
+
+avg_predictions(model = Pgar.stock.final,by="ocean",newdata=Pgar_C_stock_df)
+
+# Pgar.stock.final %>% 
+#   emmeans(~ 1,
+#           # at = list(ocean = "Pacific"),
+#           epred = TRUE, re_formula = NA) %>% 
+#   # contrast(method = "revpairwise") %>% 
+#   gather_emmeans_draws()%>%
+#   mean_hdci()
+
+ggplot(Pgar.epred, aes(x = .epred,y=ocean,fill=ocean)) +
+  stat_halfeye() +
+  scale_fill_okabe_ito() +
+  labs(x = "Predicted C Stock (Mg C Ha-1)", y = NULL,
+       # fill = "Ocean",
+       subtitle = "Pleurophycus gardenari - Posterior predictions") +
+  theme_clean() +
+  theme(legend.position = "bottom")
+# 
+# #describing the full posterior distribution
+# Pgar_estimates <- as.data.frame(describe_posterior(Pgar.stock.final,centrality="mean"))
+# Pgar_estimates$taxa <- c("Pleurophycus gardenari")
+
+# Pgar_estimates
+
+# write.csv(Pgar_estimates,file = "outputs/Pgar_C_stock_estimates.csv")
+
+```
+
+
+## Pterogophora californica
+```{r,results = FALSE}
+Pcal_C_stock_df <- C_stock_model_data_sppsplit[[8]]
+
+Pcal_c_stock_test_df<-Pcal_C_stock_df%>%
+  select(ocean,sd,ocean_temperature)%>%
+  mutate(sd=as.integer(sd))
+
+Pcal_c_stock_test_df<-unique(Pcal_c_stock_test_df)
+Pcal_c_stock_test_df$site <- NA
+Pcal_c_stock_test_df$source <- NA
+Pcal_c_stock_test_df$year <- NA
+
+
+
+Pcal.stock.1 <- brm(data = Pcal_C_stock_df,
+                  family= gaussian,
+                  formula = effect | resp_se(`sd`,sigma = TRUE) ~ ocean_temperature+ (1| year) + (1 |site),
+                  prior = priors_FE,
+                  control = list(
+                    adapt_delta = .99,
+                    max_treedepth = 15),
+                  sample_prior = TRUE,
+                  iter=5000, warmup=2500, chains = 3)
+
+Pcal.stock.2 <- brm(data = Pcal_C_stock_df,
+                  family= gaussian,
+                  formula = effect | resp_se(`sd`,sigma = TRUE) ~ (1| year) + (1 |site),
+                  prior = priors_IO,
+                  control = list(
+                    adapt_delta = .99,
+                    max_treedepth = 15),
+                  sample_prior = TRUE,
+                  iter=5000, warmup=2500, chains = 3)
+```
+
+```{r}
+loo(Pcal.stock.1,Pcal.stock.2)
+
+Pcal.stock.final <- Pcal.stock.2
+
+#save model output object
+saveRDS(Pcal.stock.final, file="final_brms/Pca_stock_final.rds")
+
+performance::r2(Pcal.stock.final)
+
+summary(Pcal.stock.final)
+
+# avg_predictions(model = Pgar.stock.final,by="ocean",newdata= Pcal_C_stock_df)
+
+plot(Pcal.stock.final, ask = FALSE)
+
+# Comparing priors to posteriors
+Pcal_priors <- prior_draws(Pcal.stock.final)
+Pcal_post<- as.data.frame(Pcal.stock.final)
+
+ggplot() +
+  geom_density(data = Pcal_priors, aes(x = Intercept)) +
+  geom_density(data = Pcal_post, aes(x = b_Intercept), color = "blue") +
+  labs(title = "Prior Distribution vs. Posterior Distribution") +
+  xlim(-30,  30) +
+  theme_classic()
+
+# Comparing prior predictive check plots - for model accuracy
+pp_check(Pgar.stock.final)
+
+
+# grand mean predictions
+
+#grand means
+Pcal.epred <- Pcal.stock.final %>%
+  epred_draws(newdata = Pcal_c_stock_test_df,
+              re_formula = NA)
+
+avg_predictions(model = Pcal.stock.final,by="ocean",newdata=Pcal_C_stock_df)
+
+# Pgar.stock.final %>% 
+#   emmeans(~ 1,
+#           # at = list(ocean = "Pacific"),
+#           epred = TRUE, re_formula = NA) %>% 
+#   # contrast(method = "revpairwise") %>% 
+#   gather_emmeans_draws()%>%
+#   mean_hdci()
+
+ggplot(Pgar.epred, aes(x = .epred,y=ocean,fill=ocean)) +
+  stat_halfeye() +
+  scale_fill_okabe_ito() +
+  labs(x = "Predicted C Stock (Mg C Ha-1)", y = NULL,
+       # fill = "Ocean",
+       subtitle = "Pterogophora californica - Posterior predictions") +
+  theme_clean() +
+  theme(legend.position = "bottom")
+
+# #describing the full posterior distribution
+# Pcal_estimates <- as.data.frame(describe_posterior(Pcal.stock.final,centrality="mean"))
+# Pcal_estimates$taxa <- c("Pterogophora californica")
+
+# Pcal_estimates
+
+# write.csv(Pcal_estimates,file = "outputs/Pcal_C_stock_estimates.csv")
+
+```
+
+
+## Saccharina latissima
+```{r,results = FALSE}
+Slat_C_stock_df <- C_stock_model_data_sppsplit[[9]]
+  # filter(is.na(latitude)==FALSE)
+
+Slat_c_stock_test_df<-Slat_C_stock_df%>%
+  select(ocean,sd,ocean_temperature)%>%
+  mutate(sd=as.integer(sd))
+
+Slat_c_stock_test_df<-unique(Slat_c_stock_test_df)
+Slat_c_stock_test_df$site <- NA
+Slat_c_stock_test_df$source <- NA
+Slat_c_stock_test_df$year <- NA
+
+
+Slat.stock.1  <- brm(data = Slat_C_stock_df,
+                  family= gaussian,
+                  formula = effect | resp_se(`sd`,sigma = TRUE) ~ ocean_temperature + ocean + (1| year)  +(1 |site),
+                  prior = priors_FE,
+                  control = list(
+                    adapt_delta = .99,
+                    max_treedepth = 15),
+                  sample_prior = TRUE,
+                  iter=5000, warmup=2500, chains = 3)
+
+Slat.stock.2  <- brm(data = Slat_C_stock_df,
+                  family= gaussian,
+                  formula = effect | resp_se(`sd`,sigma = TRUE) ~  ocean_temperature + (1| year)  +(1 |site),
+                  prior = priors_FE,
+                  control = list(
+                    adapt_delta = .99,
+                    max_treedepth = 15),
+                  sample_prior = TRUE,
+                  iter=5000, warmup=2500, chains = 3)
+
+Slat.stock.3 <-brm(data = Slat_C_stock_df,
+                  family= gaussian,
+                  formula = effect | resp_se(`sd`,sigma = TRUE) ~  ocean + (1| year)  +(1 |site),
+                  prior = priors_FE,
+                  control = list(
+                    adapt_delta = .99,
+                    max_treedepth = 15),
+                  sample_prior = TRUE,
+                  iter=5000, warmup=2500, chains = 3)
+
+
+Slat.stock.4 <- brm(data = Slat_C_stock_df,
+                  family= gaussian,
+                  formula = effect | resp_se(`sd`,sigma = TRUE) ~  (1| year)  +(1 |site),
+                  prior = priors_IO,
+                  control = list(
+                    adapt_delta = .99,
+                    max_treedepth = 15),
+                  sample_prior = TRUE,
+                  iter=5000, warmup=2500, chains = 3)
+```
+
+```{r}
+loo(Slat.stock.1,Slat.stock.2,Slat.stock.3,Slat.stock.4)
+
+Slat.stock.final <-Slat.stock.1
+
+saveRDS(Slat.stock.final, file="final_brms/Sla_stock_final.rds")
+
+performance::r2(Slat.stock.final)
+
+summary(Slat.stock.final)
+
+# conditional_effects(Slat.stock.final)
+plot(Slat.stock.final, ask = FALSE)
+
+# Comparing priors to posteriors
+Slat_priors <- prior_draws(Slat.stock.final)
+Slat_post<- as.data.frame(Slat.stock.final)
+
+ggplot() +
+  geom_density(data = Slat_priors, aes(x = Intercept)) +
+  geom_density(data = Slat_post, aes(x = b_Intercept), color = "blue") +
+  labs(title = "Prior Distribution vs. Posterior Distribution") +
+  xlim(-30,  30) +
+  theme_classic()
+
+# Comparing prior predictive check plots - for model accuracy
+pp_check(Slat.stock.final)
+
+
+# grand mean predictions
+
+#grand means
+Slat.epred <- Slat.stock.final %>%
+  epred_draws(newdata = Slat_c_stock_test_df,
+              re_formula = NA)
+
+avg_predictions(model = Slat.stock.final,by="ocean",newdata=Slat_C_stock_df)
+
+# Slat.stock.final %>% 
+#   emmeans(~ ocean,
+#           # at = list(ocean = "Pacific"),
+#           epred = TRUE, re_formula = NA) %>% 
+#   # contrast(method = "revpairwise") %>% 
+#   gather_emmeans_draws()%>%
+#   mean_hdci()
+
+
+ggplot(Slat.epred, aes(x = .epred,y=ocean,fill=ocean)) +
+  stat_halfeye() +
+  scale_fill_okabe_ito() +
+  labs(x = "Predicted C Stock (Mg C Ha-1)", y = NULL,
+       # fill = "Ocean",
+       subtitle = "Saccharina latissima - Posterior predictions") +
+  theme_clean() +
+  theme(legend.position = "bottom")
+
+
+
+# #describing the full posterior distribution
+# Slat_estimates <- as.data.frame(describe_posterior(Slat.stock.final,centrality="mean"))
+# Slat_estimates$taxa <- c("Saccharina latissima")
+
+# Slat_estimates
+
+# write.csv(Slat_estimates,file = "outputs/Slat_C_stock_estimates.csv")
+
+```
+
+```{r}
+
+rm(list= ls()[!(ls() %in% c( "Aclath.stock.1", "Aclath.stock.2", "Aclath.stock.3","Aclath.stock.4", "Aclath_C_stock_df", "Alcath_c_stock_test_df",
+                             "C_stock_model_data_sppsplit", "C_stock_rate_model_data", "C_Stock_Collated_DF",
+                             "Ccost.stock.1","Ccost.stock.2","Ccost_C_stock_df", "Ccost_c_stock_test_df",
+                             "LdigHnig.stock.1","LdigHnig.stock.2","LdigHnig.stock.3","LdigHnig.stock.4",  "LdigHnig_C_stock_df", "LdigHnig_c_stock_test_df",
+                             "Lsol.stock.1", "Lsol.stock.2","Lsol_C_stock_df", "Lsol_c_stock_test_df",
+                             "Mpyr.stock.1","Mpyr.stock.2", "Mpyr_C_stock_df", "Mpyr_C_stock_test_df",
+                             "Nleu.stock.1","Nleu.stock.2", "Nleu_C_stock_df",             "Nleu_c_stock_test_df",
+                             "Pcal.stock.1","Pcal.stock.2", "Pcal_C_stock_df","Pcal_c_stock_test_df",
+                             "Pgar.stock.1", "Pgar.stock.2", "Pgar_C_stock_df", "Pgar_c_stock_test_df",
+                             "priors_FE", "priors_IO",
+                             "Slat.stock.4","Slat.stock.3","Slat.stock.2",  "Slat.stock.1", "Slat_C_stock_df", "Slat_c_stock_test_df"))])
+
+
+save.image(file="Rdata/Carbon_Stock_BRMs.RData")
+```
