@@ -15,6 +15,7 @@ library(ggokabeito)
 library(modelr)
 library(bayestestR)
 library(ggplot2)
+library(patchwork)
 
 theme_clean <- function() {
   theme_minimal(base_family = "News Cycle") +
@@ -98,11 +99,13 @@ theme_publish <- function(base_size = 12, base_family = "",
 # Loading the final BRMs for predicting the per-area carbon stock and production rates of kelp species 
 ```{r}
 MP_stock<-readRDS("Final_Models/Mpy_stock_final.rds")
+
 MP_prod<-readRDS("Final_Models/Mpy_prod_final.rds")
 # 
 NL_stock<-readRDS("Final_Models/Nleu_stock_final.rds")
-NL_prod<-readRDS("Final_Models/Nleu_prod_final.rds")
 # 
+NL_prod<-readRDS("Final_Models/Nleu_prod_final.rds")
+ 
 CC_stock<-readRDS("Final_Models/Cco_stock_final.rds")
 CC_prod<-readRDS("Final_Models/Cco_prod_final.rds")
 # 
@@ -124,6 +127,7 @@ PG_prod<-readRDS("Final_Models/Pga_prod_final.rds")
 SL_stock<-readRDS("Final_Models/Sla_stock_final.rds")
 SL_prod<-readRDS("Final_Models/Sla_prod_final.rds")
 # 
+
 ```
 
 
@@ -503,31 +507,35 @@ All.prod.epred.summarized<-All.prod.epred %>%
 ```{r}
 
 p1<-ggplot(All.stock.epred, aes(x = .epred,y=reorder(taxa,.epred),color=ocean)) +
-  # stat_halfeye(position="dodge")+
-  tidybayes::stat_pointinterval(position = "dodge",.width=c(0.89))+
+  stat_pointinterval(position="dodge", point_interval = "mean_hdci",.width = c(0.80, 0.90))+
   labs(x = "C Stock (Mg C Ha-1)", y = NULL)+
   ggtitle("a.") +
   theme_clean() + theme_publish(base_size = 12)+
   coord_cartesian(xlim=c(0,4)) + scale_colour_manual(values=c("#0070C0","#00B251","#7030A0"))
 
 
+stocks_mean_hdci <- All.stock.epred%>%
+  dplyr::group_by(taxa,ocean)%>%
+  dplyr::summarize(mean=.epred,ci=ci(.epred))
+
+
 p2<-All.prod.epred%>%
   mutate(taxa=factor(taxa,levels=c("Pleurophycus gardneri","Costaria costata","A. clathratum / N. fimbriatum","Laminaria solidungula","L. digitata / H. nigripes","Pterygophora californica","Saccharina latissima","Macrocystis pyrifera","Nereocystis leutkeana")))%>%
   ggplot(aes(x = .epred,y=taxa,color=ocean)) +
-  # stat_halfeye(position = "dodge")+
-stat_pointinterval(aes(x = .epred,y=taxa,color=ocean), position = "dodge",point_interval =  "mean_qi", .width=c(0.89))+
+  stat_pointinterval(position="dodge", point_interval = "mean_hdci",.width = c(0.80, 0.90))+
   labs(x = " C Prod Rate (Mg C Ha-1 Yr-1)", y = NULL)+
   ggtitle("b. ") +
   theme_clean() + theme_publish(base_size = 12)+
   coord_cartesian(xlim=c(0, 20)) + scale_colour_manual(values=c("#0070C0","#00B251","#7030A0"))
 
+pane_b <-p1 + p2 + plot_annotation("Per-area carbon stock and production capacity of Canada's Kelps")
 
-pdf("plots/Figure4.pdf",height=4,width=10)
-p1 + p2 
+
+pdf("Figure4.pdf",height=5,width=10)
+pane_b
 dev.off()
 
 
-pane_b <-p1 + p2 + plot_annotation("Per-area carbon stock and production capacity of Canada's Kelps")
 
 ```
 
