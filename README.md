@@ -3,7 +3,7 @@ Data Curator: Dr. Jennifer McHenry (University of Victoria)
 
 Corresponding Manuscript: McHenry, J. et al., 2025. A blueprint for national assessments of blue carbon capacity of kelp forests applied to Canada's coastline. npj Ocean Sustainability. 
 
-FOlder Descriptions: 
+Folder Descriptions: 
 
 1. Blueprint Document/ - Folder containing a PDF describing the blueprint framework outlined in McHenry et al. for estimating the national blue carbon capacity of kelp forests. 
 
